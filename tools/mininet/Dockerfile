@@ -10,8 +10,6 @@
 FROM stratumproject/build:build as builder
 
 ENV BUILD_DEPS \
-    python-setuptools \
-    python-pip \
     python3-setuptools \
     python3-pip \
     help2man
@@ -26,7 +24,7 @@ RUN curl -L https://github.com/mininet/mininet/tarball/master | \
 # Install in a special directory that we will copy to the runtime image.
 RUN mkdir -p /output
 RUN PREFIX=/output make install-mnexec install-manpages
-RUN python setup.py install --root /output
+RUN python3 setup.py install --root /output
 # Install `m` utility so user can attach to a mininet host directly
 RUN cp util/m /output/bin/m && sed -i 's#sudo##g' /output/bin/m
 
@@ -49,7 +47,8 @@ RUN bazel build @com_github_p4lang_p4runtime//:p4runtime_proto \
     @com_google_protobuf//:protobuf_python \
     @com_google_googleapis//google/rpc/... \
     @com_github_grpc_grpc//src/compiler:grpc_python_plugin
-ENV PYTHON_PACKAGE_BASE /output/usr/local/lib/python2.7/dist-packages
+ENV PYTHON_PACKAGE_BASE /output/usr/local/lib/python3.5/dist-packages
+RUN mkdir -p $PYTHON_PACKAGE_BASE
 RUN ./bazel-out/host/bin/external/com_google_protobuf/protoc \
     ./bazel-stratum/external/com_github_p4lang_p4runtime/p4/v1/p4data.proto \
     ./bazel-stratum/external/com_github_p4lang_p4runtime/p4/v1/p4runtime.proto \
@@ -72,8 +71,8 @@ RUN touch $PYTHON_PACKAGE_BASE/p4/__init__.py && \
 # compatible to that used to generate the P4Runtime ones.
 ARG PROTOBUF_VER=3.13.0
 ARG GRPC_VER=1.30.0
-RUN pip install --root /output "protobuf<=${PROTOBUF_VER}"
-RUN pip install --root /output "grpcio<=${GRPC_VER}"
+RUN pip3 install --root /output "protobuf<=${PROTOBUF_VER}"
+RUN pip3 install --root /output "grpcio<=${GRPC_VER}"
 
 # Final stage, runtime.
 FROM bitnami/minideb:stretch as runtime
@@ -93,7 +92,7 @@ ENV RUNTIME_DEPS \
     iperf \
     arping \
     telnet \
-    python-pexpect \
+    python3 \
     python3-pexpect \
     tcpdump \
     screen \
