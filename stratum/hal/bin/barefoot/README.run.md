@@ -278,6 +278,27 @@ The `--bf_sim` flag tells Stratum not to use the Phal ONLP implementation, but
 `PhalSim`, a "fake" Phal implementation, instead. Use this flag when you are
 using a vendor-provided BSP or running Stratum with the Tofino software model.
 
+
+```bash
+./stratum/hal/bin/barefoot/docker/build-tofino-model-container.sh ~/Downloads/bf-sde/bf-sde-9.3.0.tgz
+```
+
+```bash
+docker run --rm -it --privileged \
+  --network=host \
+  stratumproject/tofino-model:9.3.0
+```
+
+```bash
+docker run -it --rm --privileged \
+  --env PLATFORM=barefoot-tofino-model \
+  --network=host \
+  stratumproject/stratum-bf:9.3.0 \
+    -bf_sim\
+    -bf_switchd_cfg /usr/share/stratum/tofino_skip_p4.conf \
+    -bf_switchd_background=false
+```
+
 ### Running the binary in BSP-less mode
 
 ```bash
