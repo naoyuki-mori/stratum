@@ -24,6 +24,7 @@ BF_SDE_PI_VER = {
     "9_0_0": "ca0291420b5b47fa2596a00877d1713aab61dc7a",
     "9_1_0": "41358da0ff32c94fa13179b9cee0ab597c9ccbcc",
     "9_2_0": "4546038f5770e84dc0d2bba90f1ee7811c9955df",
+    "9_3_0": "4546038f5770e84dc0d2bba90f1ee7811c9955df",
 }
 GNOI_COMMIT = "437c62e630389aa4547b4f0521d0bca3fb2bf811"
 GNOI_SHA = "77d8c271adc22f94a18a5261c28f209370e87a5e615801a4e7e0d09f06da531f"
@@ -37,12 +38,10 @@ def stratum_deps():
         http_archive(
             name = "com_github_grpc_grpc",
             urls = [
-                # TODO(bocon) switch back to grpc when grpc/grpc#22626 is merged
-                # gRPC version: 1.28.1 + grpc/grpc#22626 cherry-pick
-                "https://github.com/bocon13/grpc/archive/0e11d8fe7388e7147de57bfab1044ec72786ffca.tar.gz",
+                "https://github.com/grpc/grpc/archive/v1.30.0.tar.gz",
             ],
-            strip_prefix = "grpc-0e11d8fe7388e7147de57bfab1044ec72786ffca",
-            sha256 = "fb8af4ad2b7f291fbca7d458c0addd743c8769538248c0f32816250cd3e2d58d",
+            strip_prefix = "grpc-1.30.0",
+            sha256 = "419dba362eaf8f1d36849ceee17c3e2ff8ff12ac666b42d3ff02a164ebe090e9",
         )
 
     if "com_google_googleapis" not in native.existing_rules():
@@ -175,6 +174,14 @@ def stratum_deps():
             remote = "https://github.com/YangModels/yang",
             commit = "31daa2507ae507776c23b4d4176b6cdcef2a308c",
             build_file = "@//bazel:external/yang.BUILD",
+        )
+
+    if "com_github_nlohmann_json" not in native.existing_rules():
+        http_archive(
+            name = "com_github_nlohmann_json",
+            url = "https://github.com/nlohmann/json/releases/download/v3.7.3/include.zip",
+            sha256 = "87b5884741427220d3a33df1363ae0e8b898099fbc59f1c451113f6732891014",
+            build_file = "@//bazel:external/json.BUILD",
         )
 
     # -----------------------------------------------------------------------------

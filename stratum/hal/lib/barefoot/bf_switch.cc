@@ -13,7 +13,9 @@
 #include "stratum/glue/integral_types.h"
 #include "stratum/glue/logging.h"
 #include "stratum/glue/status/status_macros.h"
+#include "stratum/hal/lib/barefoot/bf.pb.h"
 #include "stratum/hal/lib/barefoot/bf_chassis_manager.h"
+#include "stratum/hal/lib/barefoot/bf_pipeline_utils.h"
 #include "stratum/hal/lib/pi/pi_node.h"
 #include "stratum/lib/constants.h"
 #include "stratum/lib/macros.h"
@@ -26,11 +28,11 @@ namespace barefoot {
 
 BFSwitch::BFSwitch(PhalInterface* phal_interface,
                    BFChassisManager* bf_chassis_manager,
-                   BFPdInterface* bf_pd_interface,
+                   BfSdeInterface* bf_sde_interface,
                    const std::map<int, PINode*>& unit_to_pi_node)
     : phal_interface_(ABSL_DIE_IF_NULL(phal_interface)),
       bf_chassis_manager_(ABSL_DIE_IF_NULL(bf_chassis_manager)),
-      bf_pd_interface_(ABSL_DIE_IF_NULL(bf_pd_interface)),
+      bf_sde_interface_(ABSL_DIE_IF_NULL(bf_sde_interface)),
       unit_to_pi_node_(unit_to_pi_node),
       node_id_to_pi_node_() {
   for (const auto& entry : unit_to_pi_node_) {
@@ -101,9 +103,34 @@ BFSwitch::~BFSwitch() {}
   return status;
 }
 
+namespace {
+// Parses the P4 ForwardingPipelineConfig to check the format of the
+// p4_device_config. If it uses a newer Stratum format, this method converts
+// it to the legacy format used by the Barefoot PI implementation. Otherwise,
+// the provided value is used as is.
+::util::Status ConvertToLegacyForwardingPipelineConfig(
+    const ::p4::v1::ForwardingPipelineConfig& forwarding_config,
+    ::p4::v1::ForwardingPipelineConfig* legacy_config) {
+  *legacy_config = forwarding_config;
+  BfPipelineConfig bf_config;
+  if (ExtractBfPipelineConfig(forwarding_config, &bf_config).ok()) {
+    std::string pi_p4_device_config;
+    RETURN_IF_ERROR(
+        BfPipelineConfigToPiConfig(bf_config, &pi_p4_device_config));
+    legacy_config->set_p4_device_config(pi_p4_device_config);
+  }
+
+  return ::util::OkStatus();
+}
+}  // namespace
+
 ::util::Status BFSwitch::PushForwardingPipelineConfig(
-    uint64 node_id, const ::p4::v1::ForwardingPipelineConfig& config) {
+    uint64 node_id, const ::p4::v1::ForwardingPipelineConfig& _config) {
   absl::WriterMutexLock l(&chassis_lock);
+
+  ::p4::v1::ForwardingPipelineConfig config;
+  RETURN_IF_ERROR(ConvertToLegacyForwardingPipelineConfig(_config, &config));
+
   ASSIGN_OR_RETURN(auto* pi_node, GetPINodeFromNodeId(node_id));
   RETURN_IF_ERROR(pi_node->PushForwardingPipelineConfig(config));
   RETURN_IF_ERROR(bf_chassis_manager_->ReplayPortsConfig(node_id));
@@ -117,14 +144,18 @@ BFSwitch::~BFSwitch() {}
   CHECK_RETURN_IF_FALSE(gtl::ContainsKey(node_id_to_unit, node_id))
       << "Unable to find unit number for node " << node_id;
   int unit = gtl::FindOrDie(node_id_to_unit, node_id);
-  ASSIGN_OR_RETURN(auto cpu_port, bf_pd_interface_->GetPcieCpuPort(unit));
-  RETURN_IF_ERROR(bf_pd_interface_->SetTmCpuPort(unit, cpu_port));
+  ASSIGN_OR_RETURN(auto cpu_port, bf_sde_interface_->GetPcieCpuPort(unit));
+  RETURN_IF_ERROR(bf_sde_interface_->SetTmCpuPort(unit, cpu_port));
   return ::util::OkStatus();
 }
 
 ::util::Status BFSwitch::SaveForwardingPipelineConfig(
-    uint64 node_id, const ::p4::v1::ForwardingPipelineConfig& config) {
+    uint64 node_id, const ::p4::v1::ForwardingPipelineConfig& _config) {
   absl::WriterMutexLock l(&chassis_lock);
+
+  ::p4::v1::ForwardingPipelineConfig config;
+  RETURN_IF_ERROR(ConvertToLegacyForwardingPipelineConfig(_config, &config));
+
   ASSIGN_OR_RETURN(auto* pi_node, GetPINodeFromNodeId(node_id));
   RETURN_IF_ERROR(pi_node->SaveForwardingPipelineConfig(config));
   RETURN_IF_ERROR(bf_chassis_manager_->ReplayPortsConfig(node_id));
@@ -146,7 +177,10 @@ BFSwitch::~BFSwitch() {}
 }
 
 ::util::Status BFSwitch::VerifyForwardingPipelineConfig(
-    uint64 node_id, const ::p4::v1::ForwardingPipelineConfig& config) {
+    uint64 node_id, const ::p4::v1::ForwardingPipelineConfig& _config) {
+  ::p4::v1::ForwardingPipelineConfig config;
+  RETURN_IF_ERROR(ConvertToLegacyForwardingPipelineConfig(_config, &config));
+
   ASSIGN_OR_RETURN(auto* pi_node, GetPINodeFromNodeId(node_id));
   return pi_node->VerifyForwardingPipelineConfig(config);
 }
@@ -227,7 +261,8 @@ BFSwitch::~BFSwitch() {}
       case DataRequest::Request::kPortCounters:
       case DataRequest::Request::kAutonegStatus:
       case DataRequest::Request::kFrontPanelPortInfo:
-      case DataRequest::Request::kLoopbackStatus: {
+      case DataRequest::Request::kLoopbackStatus:
+      case DataRequest::Request::kSdnPortId: {
         auto port_data = bf_chassis_manager_->GetPortData(req);
         if (!port_data.ok()) {
           status.Update(port_data.status());
@@ -245,7 +280,7 @@ BFSwitch::~BFSwitch() {}
       default:
         status =
             MAKE_ERROR(ERR_UNIMPLEMENTED)
-            << "Request type "
+            << "DataRequest field "
             << req.descriptor()->FindFieldByNumber(req.request_case())->name()
             << " is not supported yet: " << req.ShortDebugString() << ".";
         break;
@@ -276,10 +311,10 @@ BFSwitch::~BFSwitch() {}
 
 std::unique_ptr<BFSwitch> BFSwitch::CreateInstance(
     PhalInterface* phal_interface, BFChassisManager* bf_chassis_manager,
-    BFPdInterface* bf_pd_interface,
+    BfSdeInterface* bf_sde_interface,
     const std::map<int, PINode*>& unit_to_pi_node) {
   return absl::WrapUnique(new BFSwitch(phal_interface, bf_chassis_manager,
-                                       bf_pd_interface, unit_to_pi_node));
+                                       bf_sde_interface, unit_to_pi_node));
 }
 
 ::util::StatusOr<PINode*> BFSwitch::GetPINodeFromUnit(int unit) const {

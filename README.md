@@ -74,15 +74,16 @@ to program fixed-pipeline switches using the Tomahawk chip from Broadcom.
 ## Tofino
 
 - Delta AG9064v1
-
-- Edgecore Wedge 100BF 32x
-
-- Edgecore Wedge 100BF 65x
-
+- Edgecore Wedge100BF-32X
+- Edgecore Wedge100BF-65X
 - Inventec D5254
-
+- Inventec D5264Q28B
+- Inventec D10056
+- Inventec D10064
+- Netberg Aurora 610
+- Netberg Aurora 710
+- Netberg Aurora 750
 - Stordis BF6064X
-
 - Stordis BF2556X
 
 ## Broadcom
@@ -95,15 +96,20 @@ to program fixed-pipeline switches using the Tomahawk chip from Broadcom.
     - QCT QuantaMesh T7032-IX1
 - Tomahawk+
     - Edgecore AS7716-24SC Cassini
+    - Inventec D7054
 - Tomahawk2
 - Tomahawk3
 - Trident2
     - Edgecore AS6712
+    - Inventec D6254
+    
+## Smart NIC
+
+- Intel PAC N3000
 
 ## Software Switches
 
 - bmv2
-
 - dummy
 
 # Source code

@@ -414,7 +414,7 @@ BcmSwitch::~BcmSwitch() {}
             auto* node_info = resp.mutable_node_info();
             node_info->set_vendor_name("Broadcom");
             node_info->set_chip_name(
-                BcmChip::BcmChipType_Name(bcm_chip.ValueOrDie().type()));
+                PrintBcmChipNumber(bcm_chip.ValueOrDie().type()));
           }
         }
         break;
@@ -425,6 +425,10 @@ BcmSwitch::~BcmSwitch() {}
             req.optical_transceiver_info().module(),
             req.optical_transceiver_info().network_interface(),
             resp.mutable_optical_transceiver_info()));
+        break;
+      case DataRequest::Request::kSdnPortId:
+        // Return the requested port ID because port translation is performed.
+        resp.mutable_sdn_port_id()->set_port_id(req.sdn_port_id().port_id());
         break;
       default:
         status =

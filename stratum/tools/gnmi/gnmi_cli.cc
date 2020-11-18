@@ -1,10 +1,6 @@
 // Copyright 2019-present Open Networking Foundation
 // SPDX-License-Identifier: Apache-2.0
 
-#include <grpcpp/grpcpp.h>
-#include <grpcpp/security/credentials.h>
-#include <grpcpp/security/tls_credentials_options.h>
-
 #include <csignal>
 #include <iostream>
 #include <memory>
@@ -15,6 +11,9 @@
 #define STRIP_FLAG_HELP 1  // remove additional flag help text from gflag
 #include "gflags/gflags.h"
 #include "gnmi/gnmi.grpc.pb.h"
+#include "grpcpp/grpcpp.h"
+#include "grpcpp/security/credentials.h"
+#include "grpcpp/security/tls_credentials_options.h"
 #include "stratum/glue/init_google.h"
 #include "stratum/glue/status/status.h"
 #include "stratum/glue/status/status_macros.h"
@@ -64,10 +63,6 @@ optional arguments:
       return _status;                                                        \
     }                                                                        \
   } while (0)
-
-DECLARE_bool(colorlogtostderr);
-DECLARE_bool(logtostderr);
-DECLARE_int32(stderrthreshold);
 
 DEFINE_string(grpc_addr, "127.0.0.1:9339", "gNMI server address");
 DEFINE_string(bool_val, "", "Boolean value to be set");
@@ -310,9 +305,6 @@ void HandleSignal(int signal) {
 }  // namespace stratum
 
 int main(int argc, char** argv) {
-  FLAGS_colorlogtostderr = true;
-  FLAGS_logtostderr = true;
-  FLAGS_stderrthreshold = 0;
   ::gflags::SetUsageMessage(kUsage);
   InitGoogle(argv[0], &argc, &argv, true);
   stratum::InitStratumLogging();
