@@ -5,7 +5,7 @@
 #
 
 STRATUM_BF_DIR=$( cd $(dirname "${BASH_SOURCE[0]}") >/dev/null 2>&1 && pwd )
-JOBS=4
+JOBS=${JOBS:-4}
 
 print_help() {
 echo "
@@ -23,9 +23,9 @@ Options:
 
 Examples:
 
-    $0 -t ~/bf-sde-9.3.0.tgz
-    $0 -t ~/bf-sde-9.3.0.tgz -j 4
-    $0 -t ~/bf-sde-9.3.0.tgz -k ~/linux-4.14.49-ONL.tar.xz
+    $0 -t ~/bf-sde-9.2.0.tgz
+    $0 -t ~/bf-sde-9.2.0.tgz -j 4
+    $0 -t ~/bf-sde-9.2.0.tgz -k ~/linux-4.14.49-ONL.tar.xz
 "
 }
 

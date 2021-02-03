@@ -38,9 +38,11 @@ constexpr int BFChassisManager::kMaxPortStatusEventDepth;
 /* static */
 constexpr int BFChassisManager::kMaxXcvrEventDepth;
 
-BFChassisManager::BFChassisManager(PhalInterface* phal_interface,
+BFChassisManager::BFChassisManager(OperationMode mode,
+                                   PhalInterface* phal_interface,
                                    BfSdeInterface* bf_sde_interface)
-    : initialized_(false),
+    : mode_(mode),
+      initialized_(false),
       port_status_event_channel_(nullptr),
       port_status_event_reader_(nullptr),
       port_status_event_thread_(),
@@ -116,6 +118,9 @@ BFChassisManager::~BFChassisManager() = default;
     RETURN_IF_ERROR(bf_sde_interface_->EnablePort(unit, sdk_port_id));
     config->admin_state = ADMIN_STATE_ENABLED;
   }
+
+  RETURN_IF_ERROR(
+      bf_sde_interface_->EnablePortShaping(unit, sdk_port_id, TRI_STATE_FALSE));
 
   return ::util::OkStatus();
 }
@@ -216,6 +221,11 @@ BFChassisManager::~BFChassisManager() = default;
     config->loopback_mode = config_params.loopback_mode();
     config_changed = true;
   }
+  if (config_old.shaping_config) {
+    RETURN_IF_ERROR(ApplyPortShapingConfig(node_id, unit, sdk_port_id,
+                                           *config_old.shaping_config));
+    config_changed = true;
+  }
 
   bool need_disable = false, need_enable = false;
   if (config_params.admin_state() == ADMIN_STATE_DISABLED) {
@@ -276,7 +286,7 @@ BFChassisManager::~BFChassisManager() = default;
     }
   }
 
-  for (auto singleton_port : config.singleton_ports()) {
+  for (const auto& singleton_port : config.singleton_ports()) {
     uint32 port_id = singleton_port.id();
     uint64 node_id = singleton_port.node();
 
@@ -357,6 +367,34 @@ BFChassisManager::~BFChassisManager() = default;
     }
   }
 
+  if (config.has_vendor_config() &&
+      config.vendor_config().has_tofino_config()) {
+    const auto& node_id_to_port_shaping_config =
+        config.vendor_config().tofino_config().node_id_to_port_shaping_config();
+    for (const auto& key : node_id_to_port_shaping_config) {
+      const uint64 node_id = key.first;
+      const TofinoConfig::BfPortShapingConfig& port_id_to_shaping_config =
+          key.second;
+      CHECK_RETURN_IF_FALSE(node_id_to_port_id_to_sdk_port_id.count(node_id));
+      CHECK_RETURN_IF_FALSE(node_id_to_unit.count(node_id));
+      int unit = node_id_to_unit[node_id];
+      for (const auto& e :
+           port_id_to_shaping_config.per_port_shaping_configs()) {
+        const uint32 port_id = e.first;
+        const TofinoConfig::BfPortShapingConfig::BfPerPortShapingConfig&
+            shaping_config = e.second;
+        CHECK_RETURN_IF_FALSE(
+            node_id_to_port_id_to_sdk_port_id[node_id].count(port_id));
+        const uint32 sdk_port_id =
+            node_id_to_port_id_to_sdk_port_id[node_id][port_id];
+        RETURN_IF_ERROR(
+            ApplyPortShapingConfig(node_id, unit, sdk_port_id, shaping_config));
+        node_id_to_port_id_to_port_config[node_id][port_id].shaping_config =
+            shaping_config;
+      }
+    }
+  }
+
   // Clean up from old config.
   for (const auto& node_ports_old : node_id_to_port_id_to_port_config_) {
     auto node_id = node_ports_old.first;
@@ -390,6 +428,39 @@ BFChassisManager::~BFChassisManager() = default;
   return ::util::OkStatus();
 }
 
+::util::Status BFChassisManager::ApplyPortShapingConfig(
+    uint64 node_id, int unit, uint32 sdk_port_id,
+    const TofinoConfig::BfPortShapingConfig::BfPerPortShapingConfig&
+        shaping_config) {
+  switch (shaping_config.shaping_case()) {
+    case TofinoConfig::BfPortShapingConfig::BfPerPortShapingConfig::
+        kPacketShaping:
+      RETURN_IF_ERROR(bf_sde_interface_->SetPortShapingRate(
+          unit, sdk_port_id, true,
+          shaping_config.packet_shaping().max_burst_packets(),
+          shaping_config.packet_shaping().max_rate_pps()));
+      break;
+    case TofinoConfig::BfPortShapingConfig::BfPerPortShapingConfig::
+        kByteShaping:
+      RETURN_IF_ERROR(bf_sde_interface_->SetPortShapingRate(
+          unit, sdk_port_id, false,
+          shaping_config.byte_shaping().max_burst_bytes(),
+          shaping_config.byte_shaping().max_rate_bps()));
+      break;
+    default:
+      RETURN_ERROR(ERR_INVALID_PARAM)
+          << "Invalid port shaping config " << shaping_config.ShortDebugString()
+          << ".";
+  }
+  RETURN_IF_ERROR(
+      bf_sde_interface_->EnablePortShaping(unit, sdk_port_id, TRI_STATE_TRUE));
+  LOG(INFO) << "Configured port shaping on SDK port " << sdk_port_id
+            << " in node " << node_id << ": "
+            << shaping_config.ShortDebugString() << ".";
+
+  return ::util::OkStatus();
+}
+
 ::util::Status BFChassisManager::VerifyChassisConfig(
     const ChassisConfig& config) {
   CHECK_RETURN_IF_FALSE(config.trunk_ports_size() == 0)
@@ -403,8 +474,6 @@ BFChassisManager::~BFChassisManager() = default;
   CHECK_RETURN_IF_FALSE(config.has_chassis() && config.chassis().platform())
       << "Config needs a Chassis message with correct platform.";
   switch (config.chassis().platform()) {
-    case PLT_BAREFOOT_TOFINO:   // TODO(bocon): remove after 2020-12 release
-    case PLT_BAREFOOT_TOFINO2:  // TODO(bocon): remove after 2020-12 release
     case PLT_GENERIC_BAREFOOT_TOFINO:
     case PLT_GENERIC_BAREFOOT_TOFINO2:
       break;
@@ -412,15 +481,6 @@ BFChassisManager::~BFChassisManager() = default;
       return MAKE_ERROR(ERR_INVALID_PARAM)
              << "Unsupported platform: "
              << Platform_Name(config.chassis().platform());
-  }
-
-  // TODO(bocon): remove after 2020-12 release
-  if (config.chassis().platform() == PLT_BAREFOOT_TOFINO ||
-      config.chassis().platform() == PLT_BAREFOOT_TOFINO2) {
-    LOG(INFO) << "Chassis type " << Platform_Name(config.chassis().platform())
-              << " is deprecated. Use "
-              << Platform_Name(PLT_GENERIC_BAREFOOT_TOFINO) << " or "
-              << Platform_Name(PLT_GENERIC_BAREFOOT_TOFINO2) << " instead.";
   }
 
   // Validate Node messages. Make sure there is no two nodes with the same id.
@@ -467,9 +527,6 @@ BFChassisManager::~BFChassisManager() = default;
         << "No valid slot in " << singleton_port.ShortDebugString() << ".";
     CHECK_RETURN_IF_FALSE(singleton_port.port() > 0)
         << "No valid port in " << singleton_port.ShortDebugString() << ".";
-    CHECK_RETURN_IF_FALSE(singleton_port.channel() == 0)
-        << "SingletonPort " << singleton_port.ShortDebugString()
-        << " contains unsupported channel field.";
     CHECK_RETURN_IF_FALSE(singleton_port.speed_bps() > 0)
         << "No valid speed_bps in " << singleton_port.ShortDebugString() << ".";
     PortKey singleton_port_key(singleton_port.slot(), singleton_port.port(),
@@ -767,6 +824,12 @@ BFChassisManager::GetPortConfig(uint64 node_id, uint32 port_id) const {
       config_new->admin_state = ADMIN_STATE_ENABLED;
     }
 
+    if (config.shaping_config) {
+      RETURN_IF_ERROR(ApplyPortShapingConfig(node_id, unit, sdk_port_id,
+                                             *config.shaping_config));
+      config_new->shaping_config = config.shaping_config;
+    }
+
     return ::util::OkStatus();
   };
 
@@ -787,6 +850,7 @@ BFChassisManager::GetPortConfig(uint64 node_id, uint32 port_id) const {
   if (!initialized_) {
     return MAKE_ERROR(ERR_NOT_INITIALIZED) << "Not initialized!";
   }
+  LOG(INFO) << "Resetting port configs for node " << node_id << ".";
   auto* port_id_to_config =
       gtl::FindOrNull(node_id_to_port_id_to_port_config_, node_id);
   CHECK_RETURN_IF_FALSE(port_id_to_config != nullptr)
@@ -815,9 +879,10 @@ BFChassisManager::GetPortConfig(uint64 node_id, uint32 port_id) const {
 }
 
 std::unique_ptr<BFChassisManager> BFChassisManager::CreateInstance(
-    PhalInterface* phal_interface, BfSdeInterface* bf_sde_interface) {
+    OperationMode mode, PhalInterface* phal_interface,
+    BfSdeInterface* bf_sde_interface) {
   return absl::WrapUnique(
-      new BFChassisManager(phal_interface, bf_sde_interface));
+      new BFChassisManager(mode, phal_interface, bf_sde_interface));
 }
 
 void BFChassisManager::SendPortOperStateGnmiEvent(uint64 node_id,

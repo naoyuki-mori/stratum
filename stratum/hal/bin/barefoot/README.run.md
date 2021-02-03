@@ -25,8 +25,8 @@ You can pull a nightly version of this container image from
 $ docker pull stratumproject/stratum-bf:[SDE version]
 ```
 
-For example, the container with BF SDE 9.3.0: <br/>
-`stratumproject/stratum-bf:9.3.0`
+For example, the container with BF SDE 9.2.0: <br/>
+`stratumproject/stratum-bf:9.2.0`
 
 These containers include kernel modules for OpenNetworkLinux.
 
@@ -60,8 +60,8 @@ docker save [Image Name] -o [Tarball Name]
 
 For example,
 ```bash
-docker pull stratumproject/stratum-bf:9.3.0
-docker save stratumproject/stratum-bf:9.3.0 -o stratum-bf-9.3.0-docker.tar
+docker pull stratumproject/stratum-bf:9.2.0
+docker save stratumproject/stratum-bf:9.2.0 -o stratum-bf-9.2.0-docker.tar
 ```
 
 Then, deploy the tarball to the device via scp, rsync, http, USB stick, etc.
@@ -77,7 +77,7 @@ docker images
 For example,
 
 ```bash
-docker load -i stratum-bf-9.3.0-docker.tar
+docker load -i stratum-bf-9.2.0-docker.tar
 ```
 
 ### Set up huge pages
@@ -174,6 +174,65 @@ journalctl -u stratum_bf.service
 
 -----
 
+## Running Stratum on `tofino-model`
+
+Stratum can be run on a Tofino simulator. In these instructions, Stratum and
+`tofino-model` are both running in their own containers sharing the host's
+network stack. Other configurations are possible.
+
+### Building the `tofino-model` container
+
+Before running `tofino-model`, we can build a container that contains the
+required binaries. *This only needs to be done once for each BF SDE version.*
+
+```bash
+export SDE_TAR=<path to tar>/bf-sde-<SDE_VERSION>.tgz
+./stratum/hal/bin/barefoot/docker/build-tofino-model-container.sh $SDE_TAR
+```
+
+### Running Stratum and `tofino-model`
+
+#### Start `tofino-model`
+
+In one terminal window, run `tofino-model` in one container:
+
+```bash
+docker run --rm -it --privileged \
+  --network=host \
+  stratumproject/tofino-model:9.2.0  # <SDE_VERSION>
+```
+
+In another terminal window, run Stratum in its own container:
+
+```bash
+PLATFORM=barefoot-tofino-model \
+stratum/hal/bin/barefoot/docker/start-stratum-container.sh \
+  -bf_sim \
+  -bf_switchd_background=false \
+  -enable_onlp=false
+```
+
+### Cleaning up `tofino-model` interfaces
+
+To remove the interfaces created when the `tofino-model` container starts,
+you can run the following (with `sudo` if not running as root):
+
+```bash
+ip link show | egrep -o '(veth[[:digit:]]+)' | sort -u | \
+   xargs -n1 -I{} [sudo] ip link del {} 2> /dev/null
+```
+
+### Other deployment options
+
+You can run both Stratum and `tofino-model` natively on the host (i.e. not
+in Docker containers). They communicate over localhost TCP ports.
+
+If you wish to run multiple instances of Stratum and `tofino-model` on the
+same machine, you can use Docker's container network to link the containers'
+networking stacks together. For example, you can pass
+`--network container:stratum` when starting the `tofino-model` container.
+
+-----
 ## Stratum Runtime Options
 
 Stratum picks sane defaults for most platforms, but should you need to change some
@@ -213,7 +272,7 @@ start-stratum-container.sh
 Here is an example Chassis Config that brings up the first two physical ports:
 ```proto
 chassis {
-  platform: PLT_BAREFOOT_TOFINO
+  platform: PLT_GENERIC_BAREFOOT_TOFINO
   name: "Edgecore Wedge100BF-32x"
 }
 nodes {
@@ -256,7 +315,11 @@ Previously, the port `id` was required to match the BF device port ID for Stratu
 to function. Stratum now reads BF device port ID from the SDK using the `node`,
 `port`, and `channel` params provided in the `singleton_ports` config, which means
 the port `id` can now be set to a user-selected value. The `id` is required, and
-it must be positive and unique across all ports in the config.
+it must be positive and unique across all ports in the config. For consistency we
+use the following schema to derive the default port IDs in our configs:
+
+- Non-channelized ports: ID = front panel port number
+- Channelized ports: ID = front panel port * 100 + channel
 
 The BF device port ID (SDK port ID) can be read using gNMI:
 `/interfaces/interface[name=<name>]/state/ifindex`
@@ -268,13 +331,64 @@ in the `singleton_ports` config.
 writing P4Runtime entities and packets. In the future, we may support P4Runtime
 port translation which would allow you to use the user-provide SDN port ID.*
 
+#### Tofino specific configuration (experimental)
+
+Some parts of the ChassisConfig do not apply to all platforms. These are
+organized in the `VendorConfig` part of the configuration file. For Tofino, we
+support the following extensions:
+
+##### Port shaping
+
+Port shaping can be configured on a port-by-port basis with limits in either
+bits per second (bps) or packets per second (pps), by adding the relevant
+entries in the `node_id_to_port_shaping_config` map of the `TofinoConfig`
+message. The following snippet shows singleton port 1 being configured with a
+byte (bps) shaping rate of 1 Gbit/s and a burst size of 16 KB:
+
+```
+nodes {
+  id: 1
+  slot: 1
+  index: 1
+}
+singleton_ports {
+  id: 1
+  name: "1/0"
+  slot: 1
+  port: 1
+  speed_bps: 40000000000
+  config_params {
+    admin_state: ADMIN_STATE_ENABLED
+  }
+  node: 1
+}
+vendor_config {
+  tofino_config {
+    node_id_to_port_shaping_config {
+      key: 1  # node id reference
+      value {
+        per_port_shaping_configs {
+          key: 1  # singleton port id reference
+          value {
+            byte_shaping {
+              max_rate_bps: 1000000000 # 1G
+              max_burst_bytes: 16384 # 2x MTU
+            }
+          }
+        }
+      }
+    }
+  }
+}
+```
+
 ### Running with BSP or on Tofino model
 
 ```bash
-start-stratum.sh --bf_sim -enable_onlp=false
+start-stratum.sh -bf_sim -enable_onlp=false
 ```
 
-The `--bf_sim` flag tells Stratum not to use the Phal ONLP implementation, but
+The `-bf_sim` flag tells Stratum not to use the Phal ONLP implementation, but
 `PhalSim`, a "fake" Phal implementation, instead. Use this flag when you are
 using a vendor-provided BSP or running Stratum with the Tofino software model.
 Additionally, the ONLP plugin has to be disabled with `-enable_onlp=false`.
@@ -330,6 +444,15 @@ singleton_ports {
 
 FEC can also be configured when adding a port through gNMI.
 
+### Running with BF CLI
+
+You can enable the BF CLI by passing `-bf_switchd_background=false` as an
+argument when starting Stratum. The CLI is disabled by default.
+
+The CLI will start after Stratum and the SDE finish initialization. You may
+need to press "Enter" a few times to see the prompt. Please refer to BF SDE
+documentation for details on how to use the CLI.
+
 -----
 
 ## Troubleshooting
@@ -364,3 +487,71 @@ this particular switch model. As a workaround, [BSP mode](#Running-with-BSP-or-o
 which bypasses ONLP, is available.
 
 [start-stratum-container-sh]: https://github.com/stratum/stratum/blob/master/stratum/hal/bin/barefoot/docker/start-stratum-container.sh
+
+### RESOURCE_EXHAUSTED when pushing pipeline
+
+Stratum rejects a SetForwardingPipelineConfig request with a RESOURCE_EXHAUSTED
+gRPC error, like this:
+
+```
+INFO:PTF runner:Sending P4 config
+ERROR:PTF runner:Error during SetForwardingPipelineConfig
+ERROR:PTF runner:<_InactiveRpcError of RPC that terminated with:
+        status = StatusCode.RESOURCE_EXHAUSTED
+        details = "to-be-sent initial metadata size exceeds peer limit"
+        debug_error_string = "{"created":"@1607159813.061940445","description":"Error received from peer ipv4:127.0.0.1:28000","file":"src/core/lib/surface/call.cc","file_line":1056,"grpc_message":"to-be-sent initial metadata size exceeds peer limit","grpc_status":8}"
+>
+```
+
+This error originates from the gRPC layer and can occur when the pipeline is
+particularly large and does not fit in the [maximum receive message size](https://grpc.github.io/grpc/cpp/classgrpc_1_1_server_builder.html#ab5c8a420f2acfc6fcea2f2210e9d426e).
+Although we set a reasonable default, the value can be adjusted with Stratum's
+`-grpc_max_recv_msg_size` flag.
+
+### TNA P4 programs on Stratum-bf / PI Node
+
+When using Stratum with the legacy PI node backend, only limited support for P4
+programs targeting TNA architecture is provided. Such programs must be compiled
+with the `--p4runtime-force-std-externs` bf-p4c flag, or pushing the pipeline
+will crash the switch:
+
+```
+2020-12-07 20:09:43.810989 BF_PI ERROR - handles_map_add: error when inserting into handles map
+*** SIGSEGV (@0x0) received by PID 16282 (TID 0x7f5f599dc700) from PID 0; stack trace: ***
+    @     0x7f5f725c60e0 (unknown)
+    @           0xa7456f p4info_get_at
+    @           0xa74319 pi_p4info_table_get_implementation
+    @     0x7f5f744b9add (unknown)
+    @     0x7f5f744b9ee3 pi_state_assign_device
+    @     0x7f5f744b2f47 (unknown)
+    @     0x7f5f73e29b10 bf_drv_notify_clients_dev_add
+    @     0x7f5f73e26b45 bf_device_add
+    @           0x9f0689 bf_switchd_device_add.part.4
+    @           0x9f10b7 bf_switchd_device_add_with_p4.part.5
+    @     0x7f5f744b33a5 _pi_update_device_start
+    @           0xa6eef5 pi_update_device_start
+    @           0x9f8403 pi::fe::proto::DeviceMgrImp::pipeline_config_set()
+    @           0x9f7e31 pi::fe::proto::DeviceMgr::pipeline_config_set()
+    @           0x7220d6 stratum::hal::pi::PINode::PushForwardingPipelineConfig()
+    @           0x41fb99 stratum::hal::barefoot::BFSwitch::PushForwardingPipelineConfig()
+    @           0x65db56 stratum::hal::P4Service::SetForwardingPipelineConfig()
+```
+
+Use Stratum-bfrt with the BfRt backend if you need advanced functionality.
+
+### Error pushing pipeline to Stratum-bf
+
+```
+E20201207 20:44:53.611562 18416 PI-device_mgr.cpp:0] Error in first phase of device update
+E20201207 20:44:53.611724 18416 bf_switch.cc:135] Return Error: pi_node->PushForwardingPipelineConfig(config) failed with generic::unknown:
+E20201207 20:44:53.612004 18416 p4_service.cc:381] generic::unknown: Error without message at stratum/hal/lib/common/p4_service.cc:381
+E20201207 20:44:53.612030 18416 error_buffer.cc:30] (p4_service.cc:422): Failed to set forwarding pipeline config for node 1: Error without message at stratum/hal/lib/common/p4_service.cc:381
+```
+
+This error occurs when the binary pipeline is not in the correct format.
+Make sure the pipeline config binary has been packed correctly for PI node, like
+so: https://github.com/stratum/stratum/blob/master/stratum/hal/bin/barefoot/update_config.py#L39-L52.
+You cannot push the compiler output (e.g. `tofino.bin`) directly.
+
+Also, consider moving to the newer [protobuf](README.pipeline.md) based pipeline
+format.

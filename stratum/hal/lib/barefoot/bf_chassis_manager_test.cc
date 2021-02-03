@@ -3,6 +3,8 @@
 
 #include "stratum/hal/lib/barefoot/bf_chassis_manager.h"
 
+#include <string>
+
 #include "absl/time/clock.h"
 #include "absl/time/time.h"
 #include "gmock/gmock.h"
@@ -16,9 +18,15 @@
 #include "stratum/hal/lib/common/phal_mock.h"
 #include "stratum/lib/constants.h"
 #include "stratum/lib/test_utils/matchers.h"
+#include "stratum/lib/utils.h"
 
-using ::stratum::test_utils::EqualsProto;
+namespace stratum {
+namespace hal {
+namespace barefoot {
+
+using test_utils::EqualsProto;
 using ::testing::_;
+using ::testing::AtLeast;
 using ::testing::AtMost;
 using ::testing::DoAll;
 using ::testing::HasSubstr;
@@ -28,10 +36,6 @@ using ::testing::Mock;
 using ::testing::Return;
 using ::testing::SetArgPointee;
 using ::testing::WithArg;
-
-namespace stratum {
-namespace hal {
-namespace barefoot {
 
 namespace {
 
@@ -89,6 +93,10 @@ class ChassisConfigBuilder {
     return nullptr;
   }
 
+  void SetVendorConfig(const VendorConfig& vendor_config) {
+    *config_.mutable_vendor_config() = vendor_config;
+  }
+
   void RemoveLastPort() { config_.mutable_singleton_ports()->RemoveLast(); }
 
   const ChassisConfig& Get() const { return config_; }
@@ -107,8 +115,9 @@ class BFChassisManagerTest : public ::testing::Test {
   void SetUp() override {
     phal_mock_ = absl::make_unique<PhalMock>();
     bf_sde_mock_ = absl::make_unique<BfSdeMock>();
-    bf_chassis_manager_ =
-        BFChassisManager::CreateInstance(phal_mock_.get(), bf_sde_mock_.get());
+    // TODO(max): create parametrized test suite over mode.
+    bf_chassis_manager_ = BFChassisManager::CreateInstance(
+        OPERATION_MODE_STANDALONE, phal_mock_.get(), bf_sde_mock_.get());
     ON_CALL(*bf_sde_mock_, IsValidPort(_, _))
         .WillByDefault(
             WithArg<1>(Invoke([](uint32 id) { return id > kSdkPortOffset; })));
@@ -150,6 +159,11 @@ class BFChassisManagerTest : public ::testing::Test {
   }
 
   bool Initialized() { return bf_chassis_manager_->initialized_; }
+
+  ::util::Status VerifyChassisConfig(const ChassisConfig& config) {
+    absl::ReaderMutexLock l(&chassis_lock);
+    return bf_chassis_manager_->VerifyChassisConfig(config);
+  }
 
   ::util::Status PushChassisConfig(const ChassisConfig& config) {
     absl::WriterMutexLock l(&chassis_lock);
@@ -281,6 +295,46 @@ TEST_F(BFChassisManagerTest, SetPortLoopback) {
       *bf_sde_mock_,
       SetPortLoopbackMode(kUnit, kPortId + kSdkPortOffset, LOOPBACK_STATE_MAC));
   EXPECT_CALL(*bf_sde_mock_, EnablePort(kUnit, kPortId + kSdkPortOffset));
+
+  ASSERT_OK(PushChassisConfig(builder));
+  ASSERT_OK(ShutdownAndTestCleanState());
+}
+
+TEST_F(BFChassisManagerTest, ApplyPortShaping) {
+  const std::string kVendorConfigText = R"PROTO(
+    tofino_config {
+      node_id_to_port_shaping_config {
+        key: 7654321
+        value {
+          per_port_shaping_configs {
+            key: 12345
+            value {
+              byte_shaping {
+                max_rate_bps: 10000000000 # 10G
+                max_burst_bytes: 16384 # 2x jumbo frame
+              }
+            }
+          }
+        }
+      }
+    }
+  )PROTO";
+
+  VendorConfig vendor_config;
+  ASSERT_OK(ParseProtoFromString(kVendorConfigText, &vendor_config));
+
+  ChassisConfigBuilder builder;
+  builder.SetVendorConfig(vendor_config);
+  ASSERT_OK(PushBaseChassisConfig(&builder));
+
+  EXPECT_CALL(*bf_sde_mock_, SetPortShapingRate(kUnit, kPortId + kSdkPortOffset,
+                                                false, 16384, kTenGigBps))
+      .Times(AtLeast(1));
+  EXPECT_CALL(*bf_sde_mock_, EnablePortShaping(kUnit, kPortId + kSdkPortOffset,
+                                               TRI_STATE_TRUE))
+      .Times(AtLeast(1));
+  EXPECT_CALL(*bf_sde_mock_, EnablePort(kUnit, kPortId + kSdkPortOffset))
+      .Times(AtLeast(1));
 
   ASSERT_OK(PushChassisConfig(builder));
   ASSERT_OK(ShutdownAndTestCleanState());
@@ -560,6 +614,52 @@ TEST_F(BFChassisManagerTest, GetSdkPortId) {
   EXPECT_EQ(resp.ValueOrDie(), kPortId + kSdkPortOffset);
 
   ASSERT_OK(ShutdownAndTestCleanState());
+}
+
+TEST_F(BFChassisManagerTest, VerifyChassisConfigSuccess) {
+  const std::string kConfigText1 = R"(
+      description: "Sample Generic Tofino config 2x25G ports."
+      chassis {
+        platform: PLT_GENERIC_BAREFOOT_TOFINO
+        name: "standalone"
+      }
+      nodes {
+        id: 7654321
+        slot: 1
+      }
+      singleton_ports {
+        id: 1
+        slot: 1
+        port: 1
+        channel: 1
+        speed_bps: 25000000000
+        node: 7654321
+        config_params {
+          admin_state: ADMIN_STATE_ENABLED
+        }
+      }
+      singleton_ports {
+        id: 2
+        slot: 1
+        port: 1
+        channel: 2
+        speed_bps: 25000000000
+        node: 7654321
+        config_params {
+          admin_state: ADMIN_STATE_ENABLED
+        }
+      }
+  )";
+
+  ChassisConfig config1;
+  ASSERT_OK(ParseProtoFromString(kConfigText1, &config1));
+
+  EXPECT_CALL(*bf_sde_mock_, GetPortIdFromPortKey(kUnit, PortKey(1, 1, 1)))
+      .WillRepeatedly(Return(1 + kSdkPortOffset));
+  EXPECT_CALL(*bf_sde_mock_, GetPortIdFromPortKey(kUnit, PortKey(1, 1, 2)))
+      .WillRepeatedly(Return(2 + kSdkPortOffset));
+
+  ASSERT_OK(VerifyChassisConfig(config1));
 }
 
 }  // namespace barefoot

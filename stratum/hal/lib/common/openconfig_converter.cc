@@ -78,6 +78,14 @@ using namespace openconfig::enums;  // NOLINT
       chassis->set_platform(
           OPENCONFIGHERCULESPLATFORMPLATFORMTYPE_GENERIC_TOMAHAWK_PLUS);
       break;
+    case PLT_GENERIC_TOMAHAWK2:
+      chassis->set_platform(
+          OPENCONFIGHERCULESPLATFORMPLATFORMTYPE_GENERIC_TOMAHAWK2);
+      break;
+    case PLT_GENERIC_TOMAHAWK3:
+      chassis->set_platform(
+          OPENCONFIGHERCULESPLATFORMPLATFORMTYPE_GENERIC_TOMAHAWK3);
+      break;
     case PLT_MLNX_SN2700:
       chassis->set_platform(OPENCONFIGHERCULESPLATFORMPLATFORMTYPE_MLNX_SN2700);
       break;
@@ -442,6 +450,12 @@ TrunkPortToInterfaces(const ChassisConfig& root, const TrunkPort& in) {
     case OPENCONFIGHERCULESPLATFORMPLATFORMTYPE_GENERIC_TOMAHAWK_PLUS:
       to.set_platform(PLT_GENERIC_TOMAHAWK_PLUS);
       break;
+    case OPENCONFIGHERCULESPLATFORMPLATFORMTYPE_GENERIC_TOMAHAWK2:
+      to.set_platform(PLT_GENERIC_TOMAHAWK2);
+      break;
+    case OPENCONFIGHERCULESPLATFORMPLATFORMTYPE_GENERIC_TOMAHAWK3:
+      to.set_platform(PLT_GENERIC_TOMAHAWK3);
+      break;
     case OPENCONFIGHERCULESPLATFORMPLATFORMTYPE_MLNX_SN2700:
       to.set_platform(PLT_MLNX_SN2700);
       break;
@@ -747,9 +761,8 @@ TrunkPortToInterfaces(const ChassisConfig& root, const TrunkPort& in) {
   }
 
   // FIXME(Yi Tseng): Should we use other field to store interface channel?
-  for (auto& channel : interface.physical_channel()) {
-    to.set_channel(channel.value());
-    break;
+  if (interface.physical_channel_size() > 0) {
+    to.set_channel(interface.physical_channel(0).value());
   }
 
   if (interface.has_enabled()) {
