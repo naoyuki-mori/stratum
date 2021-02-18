@@ -29,6 +29,7 @@ If you're completly new to the world of P4 and are looking for step-by-step inst
 - [Code of Conduct](/CODE_OF_CONDUCT.md)
 - [Contribution Guidelines](/CONTRIBUTING.md)
 - [IDE Setup](https://github.com/stratum/stratum/wiki/IDE-setup-for-development)
+- [Release Plan](stratum/stratum/docs/release_plan.md)
 - [PHAL Development Tutorial](/stratum/docs/phal_development_tutorial.md)
 - [Stratum Configurators Design Document](/stratum/docs/configurators.md)
 - [Stratum PHAL Overview (Physical Hardware Access Layer)](/stratum/docs/phal.md)
@@ -94,6 +95,8 @@ to program fixed-pipeline switches using the Tomahawk chip from Broadcom.
 
 ## Tofino
 
+- APS Networks BF2556X-1T
+- APS Networks BF6064X-T
 - Delta AG9064v1
 - Edgecore Wedge100BF-32QS
 - Edgecore Wedge100BF-32X
@@ -105,8 +108,6 @@ to program fixed-pipeline switches using the Tomahawk chip from Broadcom.
 - Netberg Aurora 610
 - Netberg Aurora 710
 - Netberg Aurora 750
-- Stordis BF6064X
-- Stordis BF2556X
 
 ## Broadcom
 
