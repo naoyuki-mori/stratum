@@ -14,6 +14,7 @@
 #include "stratum/hal/lib/barefoot/bf_pipeline_utils.h"
 #include "stratum/hal/lib/barefoot/bf_sde_interface.h"
 #include "stratum/hal/lib/barefoot/bfrt_constants.h"
+#include "stratum/hal/lib/common/proto_oneof_writer_wrapper.h"
 #include "stratum/hal/lib/common/writer_interface.h"
 #include "stratum/lib/macros.h"
 #include "stratum/lib/utils.h"
@@ -178,12 +179,16 @@ BfrtNode::~BfrtNode() = default;
             session, update.type(), update.entity().register_entry());
         break;
       }
-      case ::p4::v1::Entity::kMeterEntry:
+      case ::p4::v1::Entity::kMeterEntry: {
+        status = bfrt_table_manager_->WriteMeterEntry(
+            session, update.type(), update.entity().meter_entry());
+        break;
+      }
       case ::p4::v1::Entity::kDirectMeterEntry:
       case ::p4::v1::Entity::kValueSetEntry:
       case ::p4::v1::Entity::kDigestEntry:
       default:
-        status = MAKE_ERROR()
+        status = MAKE_ERROR(ERR_UNIMPLEMENTED)
                  << "Unsupported entity type: " << update.ShortDebugString();
         break;
     }
@@ -279,7 +284,13 @@ BfrtNode::~BfrtNode() = default;
         details->push_back(status);
         break;
       }
-      case ::p4::v1::Entity::kMeterEntry:
+      case ::p4::v1::Entity::kMeterEntry: {
+        auto status = bfrt_table_manager_->ReadMeterEntry(
+            session, entity.meter_entry(), writer);
+        success &= status.ok();
+        details->push_back(status);
+        break;
+      }
       case ::p4::v1::Entity::kDirectMeterEntry:
       case ::p4::v1::Entity::kValueSetEntry:
       case ::p4::v1::Entity::kDigestEntry:
@@ -309,7 +320,7 @@ BfrtNode::~BfrtNode() = default;
     return MAKE_ERROR(ERR_NOT_INITIALIZED) << "Not initialized!";
   }
   auto packet_in_writer =
-      std::make_shared<ConstraintWriterWrapper<::p4::v1::StreamMessageResponse,
+      std::make_shared<ProtoOneofWriterWrapper<::p4::v1::StreamMessageResponse,
                                                ::p4::v1::PacketIn>>(
           writer, &::p4::v1::StreamMessageResponse::mutable_packet);
 
